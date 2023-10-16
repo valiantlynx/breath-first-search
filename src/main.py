@@ -1,16 +1,17 @@
-from typing import Union
-from fastapi import FastAPI
-from fastapi.responses import HTMLResponse  
+from typing import List, Tuple
+from fastapi import FastAPI, Request
+from fastapi.responses import HTMLResponse, JSONResponse
 from queue import Queue
 import random
+import json
 
 app = FastAPI()
  
 import debugpy
 debugpy.listen(("0.0.0.0", 5678))
 
-
-
+# Store the path history
+path_history: List[Tuple[int, int]] = []
 
 def create_maze(rows, cols, start, end):
     # Initialize maze with walls (1)
@@ -37,79 +38,77 @@ def create_maze(rows, cols, start, end):
 
     return maze
 
-
-def bfs(maze, start, end):
-    directions = [(0, 1), (1, 0), (0, -1), (-1, 0)]
+def bfs(maze, start, end, visited, path):
     queue = Queue()
     queue.put(start)
-    parent = {start: None}
-
+    
     while not queue.empty():
         current = queue.get()
         if current == end:
             break
+        visited.add(current)
+        
+        for neighbor in get_neighbors(maze, current):
+            if neighbor not in visited:
+                queue.put(neighbor)
+                path.append(neighbor)
+                path_history.append(list(path))  # Store the path history
 
-        for dx, dy in directions:
-            new_x, new_y = current[0] + dx, current[1] + dy
-            if 0 <= new_x < len(maze) and 0 <= new_y < len(maze[0]) and maze[new_x][new_y] == 0 and (new_x, new_y) not in parent:
-                queue.put((new_x, new_y))
-                parent[(new_x, new_y)] = current
+def get_neighbors(maze, current):
+    neighbors = []
+    right = (current[0], current[1] + 1)
+    down = (current[0] + 1, current[1])
+    left = (current[0], current[1] - 1)
+    up = (current[0] - 1, current[1])
+    
+    directions = [right, down, left, up]
+    
+    for neighbor in directions:
+        if (0 <= neighbor[0] < len(maze) and 0 <= neighbor[1] < len(maze[0])):
+            if maze[neighbor[0]][neighbor[1]] != 1:
+                if maze[neighbor[0]][neighbor[1]] == 0 or maze[neighbor[0]][neighbor[1]] == 3:
+                    neighbors.append(neighbor)
+        
+    return neighbors
 
-    # Reconstruct the path
-    path = []
-    while current is not None:
-        path.append(current)
-        current = parent[current]
-    path.reverse()
-    return path
-
-
-@app.get("/", response_class=HTMLResponse)
-def read_root():
+@app.get("/generate_maze", response_class=JSONResponse)
+def generate_maze(request: Request):
+    global path_history
+    path_history = []  # Clear the old path history
+    
     rows = 11
     cols = 11
-    
-    #row and collum of the start and end
     start = (0, 0)
-    end = (10, 10)
+    end = (random.randint(0, rows - 1), random.randint(0, cols - 1))
     
     maze = create_maze(rows, cols, start, end)
-    path = bfs(maze, start, end)
-
-    # HTML code to render the maze with animations
-    html_content = """
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css">
-    </head>
-    <body>
-        <div class="container mx-auto p-4">
-            <h1 class="text-2xl font-semibold mb-4">Maze</h1>
-            <div class="flex flex-wrap" style="width: 1100px">
-    """
-
-    for row in range(len(maze)):
-        for col in range(len(maze[0])):
-            tile_class = "p-1 m-0"  # No padding and no margin
-            if (row, col) in path:
-                tile_class += " bg-yellow-500"  # Highlight visited cells
-            if maze[row][col] == 1:  # Wall
-                tile_class += " bg-gray-500"
-            elif maze[row][col] == 2:  # Start
-                tile_class += " bg-green-500 border border-green-500"
-            elif maze[row][col] == 3:  # End
-                tile_class += " bg-red-500"
-            else:  # Path
-                tile_class += " bg-white border border-gray-300"
-            
-            html_content += f'<div class="{tile_class} w-24 h-24"></div>'  # Adjust dimensions
-
-    html_content += """
-            </div>
-        </div>
-    </body>
-    </html>
-    """
     
+    visited = set()
+    path = [start]
+    bfs(maze, start, end, visited, path)
+    
+    # Return the maze and path history as JSON
+    return {
+        "maze": maze,
+        "path_history": path_history,
+        "start": start,
+        "end": end
+    }
+
+@app.get("/", response_class=HTMLResponse)
+async def read_root(request: Request):
+    # Read the content of your HTML file
+    with open("./src/index.html", "r") as file:
+        html_content = file.read()
+    # Set the data-path-history attribute with the path history
+    html_content = html_content.replace(
+        '<div id="maze" class="mt-4">',
+        f'<div id="maze" class="mt-4" data-path-history=\'{json.dumps(path_history)}\'>'
+    )
+
     return HTMLResponse(content=html_content)
+
+@app.get("/path_history", response_class=JSONResponse)
+def get_path_history(request: Request):
+    global path_history
+    return JSONResponse(content=path_history)
